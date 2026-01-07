@@ -51,3 +51,9 @@ cover/
 .vscode/
 .idea/
 *.swp
+
+data/
+real_data/
+test_data/
+checkpoints/
+logs/

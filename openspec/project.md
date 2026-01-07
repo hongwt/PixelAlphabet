@@ -8,6 +8,8 @@
 - OpenCV (headless)
 - NumPy
 - Pytest (Testing)
+- PyTorch (Deep Learning Framework)
+- Torchvision (Models & Transformations)
 
 ## Project Conventions
 
