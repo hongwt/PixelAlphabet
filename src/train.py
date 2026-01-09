@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.model import create_model
 from src.dataset import get_dataloader, label_to_char, char_to_label
-from src.loss import FocalLoss
+from src.loss import FocalLoss, create_loss_function
 
 
 def log_confusion_matrix(preds, targets, writer, epoch):
@@ -174,8 +174,17 @@ def main(args):
     model = create_model(num_classes=37, dropout_rate=args.dropout)
     model = model.to(device)
     
-    # Loss and optimizer
-    criterion = FocalLoss(gamma=2.0)
+    # Loss function (Hardcoded to Combined Loss as per requirements)
+    criterion = create_loss_function(
+        'combined',
+        use_focal=True,
+        use_label_smoothing=True,
+        smoothing=0.1,
+        lambda_focal=0.5
+    )
+    print("Using loss function: Combined (Focal + Label Smoothing)")
+    
+    # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     
     # Learning rate scheduler
@@ -269,7 +278,7 @@ if __name__ == '__main__':
                         help='Batch size')
     parser.add_argument('--learning-rate', type=float, default=1e-3,
                         help='Initial learning rate')
-    parser.add_argument('--dropout', type=float, default=0.4,
+    parser.add_argument('--dropout', type=float, default=0.3,
                         help='Dropout rate')
     
     # System

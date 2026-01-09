@@ -118,14 +118,24 @@ class PixelDataset(Dataset):
         transform_list = []
         
         if self.augmentation:
-            # Data augmentation for training
+            # Data augmentation for training - enhanced diversity
             transform_list.extend([
+                # Expanded color jitter for better robustness
                 transforms.ColorJitter(
-                    brightness=0.3,
-                    contrast=0.3,
-                    saturation=0.2,
-                    hue=0.1
+                    brightness=0.4,  # ±40%
+                    contrast=0.4,    # ±40%
+                    saturation=0.3,  # ±30%
+                    hue=0.15         # ±15%
                 ),
+                # Random blur to simulate different image quality
+                transforms.RandomApply([
+                    transforms.GaussianBlur(kernel_size=3, sigma=(0.5, 1.0))
+                ], p=0.3),
+                # Random sharpness adjustment
+                transforms.RandomApply([
+                    transforms.RandomAdjustSharpness(sharpness_factor=2.0)
+                ], p=0.2),
+                # Geometric transformations
                 transforms.RandomAffine(
                     degrees=5,
                     translate=(0.08, 0.08),  # ~2 pixels for 24x24

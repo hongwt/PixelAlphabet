@@ -3,11 +3,13 @@
 
 ## Features
 
-- **Custom CNN Architecture**: 5-layer ResNet-style network with spatial attention
+- **Optimized CNN Architecture**: Efficient ResNet-style network with SE Attention (~1M params)
 - **24x24 Native Resolution**: Direct processing without upscaling
 - **37 Classes**: Digits (0-9), Letters (A-Z), and 'NA' for non-character images
 - **Robust to Variations**: Handles different backgrounds, fonts, and similar characters (0/O, I/l)
-- **Data Augmentation**: Color jitter, geometric transforms, and noise injection
+- **Enhanced Data Augmentation**: Color jitter, geometric transforms, blur, sharpness, and noise
+- **Advanced Loss Functions**: Combined Focal Loss + Label Smoothing (Built-in)
+- **Multi-Font Support**: 15+ fonts for training data generation (system fonts + custom TTF)
 
 ## Installation
 
@@ -117,14 +119,22 @@ Each directory should contain 24x24 PNG images of the respective character.
 
 ### Training
 
+Train the PixelNet model:
+
 ```bash
 python -m src.train \
     --data-root ./data \
     --output-dir ./checkpoints \
     --epochs 100 \
     --batch-size 64 \
-    --learning-rate 1e-3
+    --learning-rate 1e-3 \
+    --dropout 0.3
 ```
+
+**Training Features**:
+- Uses **Combined Loss** (Focal Loss + Label Smoothing) by default for better class separation and hard example mining.
+- Automatically saves the best model based on validation accuracy.
+- Logs metrics to TensorBoard (`checkpoints/run_TIMESTAMP/logs`).
 
 ### Inference
 
@@ -158,15 +168,13 @@ pytest --cov=src tests/
 
 ## Model Architecture
 
-**PixelNet** (~500K-1M parameters):
+**PixelNet** (Optimized):
 
-1. **Initial Conv Block**: 3→32 channels, 24x24→12x12
-2. **Residual Block 1**: 32→64 channels, 12x12→6x6
-3. **Residual Block 2**: 64→128 channels, 6x6→3x3
-4. **Residual Block 3**: 128→256 channels, 3x3→3x3
-5. **Residual Block 4**: 256→512 channels, 3x3→3x3
-6. **Spatial Attention**: Focus on discriminative regions
-7. **Global Average Pooling** + **FC Layers** with Dropout (0.4)
+1. **Initial Conv Block**: 3→64 channels, 24x24 (No downsampling)
+2. **Residual Block 1**: 64→128 channels, 24x24
+3. **Residual Block 2**: 128→256 channels, 24x24→12x12 (Stride 2)
+4. **SE Attention**: Squeeze-and-Excitation Block (Channel Attention)
+5. **Global Average Pooling** + **FC Layers** (256→128→37) with Dropout (0.3)
 
 ## Development
 

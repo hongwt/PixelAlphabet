@@ -18,17 +18,29 @@ from PIL import Image, ImageDraw, ImageFont
 # Default character set (excludes I and O to avoid confusion with 1 and 0)
 DEFAULT_CHARSET = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
-# System fonts to try
+# Required font files from Fonts directory
+REQUIRED_FONTS = [
+    "ARHei.ttf",
+    "ARIALN.TTF",
+    "ARKai_C.ttf",
+    "ARKai_T.ttf",
+    "bHEI00M.TTF",
+    "bHEI01B.TTF",
+    "bKAI00M.TTF",
+    "bLEI00D.TTF",
+    "FRIZQT__.TTF"
+]
+
+# Additional Windows system fonts for better diversity
 SYSTEM_FONTS = [
-    "Arial",
-    "Times New Roman",
-    "Helvetica",
-    "Verdana",
-    "Georgia",
-    "Garamond",
-    "Courier New",
-    "Tahoma",
-    "Trebuchet MS"
+    "arial.ttf",          # Sans-serif
+    "times.ttf",          # Serif
+    "cour.ttf",           # Monospace (Courier New)
+    "georgia.ttf",        # Serif
+    "verdana.ttf",        # Sans-serif
+    "trebuc.ttf",         # Sans-serif (Trebuchet MS)
+    "consola.ttf",        # Monospace (Consolas)
+    "comic.ttf",          # Handwriting style
 ]
 
 # Logger setup
@@ -130,33 +142,35 @@ def draw_text_outline(
     draw.text((x, y), text, font=font, fill=fill_color)
 
 
-def load_system_fonts() -> List[str]:
-    """
-    Get list of available system fonts.
-    
-    Returns:
-        List of font names
-    """
-    return SYSTEM_FONTS.copy()
-
-
 def load_custom_fonts(fonts_dir: Path) -> List[Path]:
     """
-    Load custom TrueType fonts from directory.
+    Load required TrueType fonts from directory.
     
     Args:
         fonts_dir: Path to directory containing .ttf files
         
     Returns:
-        List of paths to .ttf font files
+        List of paths to required .ttf font files
     """
     if not fonts_dir.exists():
-        logger.warning(f"Fonts directory not found: {fonts_dir}")
+        logger.error(f"Fonts directory not found: {fonts_dir}")
         return []
     
-    ttf_files = list(fonts_dir.glob("*.ttf")) + list(fonts_dir.glob("*.TTF"))
-    logger.info(f"Found {len(ttf_files)} custom fonts in {fonts_dir}")
-    return ttf_files
+    font_paths = []
+    missing_fonts = []
+    
+    for font_name in REQUIRED_FONTS:
+        font_path = fonts_dir / font_name
+        if font_path.exists():
+            font_paths.append(font_path)
+        else:
+            missing_fonts.append(font_name)
+    
+    if missing_fonts:
+        logger.warning(f"Missing fonts: {', '.join(missing_fonts)}")
+    
+    logger.info(f"Loaded {len(font_paths)}/{len(REQUIRED_FONTS)} required fonts from {fonts_dir}")
+    return font_paths
 
 
 def create_font(font_spec: str, size: int) -> Optional[ImageFont.FreeTypeFont]:
@@ -237,7 +251,7 @@ class DataGenerator:
         fonts_dir: Path,
         split: str = "train",
         charset: str = DEFAULT_CHARSET,
-        font_size_range: Tuple[int, int] = (12, 14),
+        font_size_range: Tuple[int, int] = (10, 24),
         seed: Optional[int] = None
     ):
         """
@@ -298,24 +312,32 @@ class DataGenerator:
     
     def _initialize_fonts(self) -> List[str]:
         """
-        Initialize list of available fonts (system + custom).
+        Initialize list of required fonts from Fonts directory and system fonts.
         
         Returns:
-            List of font specifications (names or paths)
+            List of font file paths
         """
         fonts = []
         
-        # Add system fonts
-        fonts.extend(load_system_fonts())
-        
-        # Add custom fonts
+        # Load required custom fonts
         custom_fonts = load_custom_fonts(self.fonts_dir)
         fonts.extend([str(f) for f in custom_fonts])
         
-        if not fonts:
-            logger.warning("No fonts available - will use fallback font")
-            fonts = ["arial.ttf"]  # Ensure at least one entry
+        # Load Windows system fonts
+        if sys.platform == 'win32':
+            for font_name in SYSTEM_FONTS:
+                font_path = f"C:\\Windows\\Fonts\\{font_name}"
+                if os.path.exists(font_path):
+                    fonts.append(font_path)
+                    logger.debug(f"Added system font: {font_name}")
         
+        if not fonts:
+            raise ValueError(
+                f"No required fonts found in {self.fonts_dir}. "
+                f"Please ensure the following fonts are available: {', '.join(REQUIRED_FONTS)}"
+            )
+        
+        logger.info(f"Loaded {len(fonts)} total fonts ({len(custom_fonts)} custom + {len(fonts) - len(custom_fonts)} system)")
         return fonts
     
     def _discover_icons(self) -> List[Path]:
@@ -436,9 +458,20 @@ class DataGenerator:
         # Measure text size
         text_width, text_height = measure_text_size(char, font)
         
-        # Calculate text position (top-right with 3px margins)
-        text_x = patch.width - text_width - 3
-        text_y = 3
+        # Calculate text position (Centered with random jitter)
+        # Center of the 24x24 patch
+        center_x = (patch.width - text_width) // 2
+        center_y = (patch.height - text_height) // 2
+        
+        # Add random jitter (±6 pixels) to increase position diversity
+        jitter_x = random.randint(-6, 6)
+        jitter_y = random.randint(-6, 6)
+        
+        text_x = center_x + jitter_x
+        text_y = center_y + jitter_y
+        
+        # Ensure extremely large fonts don't position completely off-screen
+        # But allow partial overlap as that is good for robustness
         
         # Draw text with outline
         draw_text_outline(draw, char, (text_x, text_y), font)
@@ -537,8 +570,8 @@ Example usage:
     parser.add_argument(
         "--font-size-range",
         type=str,
-        default="12-14",
-        help="Font size range as 'min-max' (default: 12-14)"
+        default="10-24",
+        help="Font size range as 'min-max' (default: 10-24)"
     )
     
     parser.add_argument(
