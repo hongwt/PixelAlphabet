@@ -16,7 +16,7 @@ The system MUST use a custom deep Convolutional Neural Network (CNN) with residu
     - Block 5: ResBlock(512->512, stride=1) - Keeps 12x12 resolution
 - **Attention**: Spatial Attention layer to focus on character regions.
 - **Regularization**: Dropout (p=0.4) before FC layers.
-- **Output Layer**: Fully Connected layer with 37 outputs.
+- **Output Layer**: Fully Connected layer with 36 outputs (Digits 0-9, Letters A-Z).
 - **Parameters**: Approximately 9M-10M parameters.
 
 ### Scenario: Alphanumeric Classification
@@ -24,13 +24,14 @@ Given a 24x24 image containing a clear character 'A',
 When the model processes the image,
 Then it should return the label 'A' with probability > 0.8.
 
-### Requirement: 'NA' Class Handling
-The system MUST support a 'Not Applicable' (NA) class for images that do not contain recognizable text.
+### Requirement: Low Confidence Handling
+The system MUST handle non-character images by producing low confidence scores for all valid classes.
+- If the maximum probability of the output is below a threshold (e.g., 0.6), the result should be considered "No Character".
 
-### Scenario: Non-text Image
+### Scenario: Non-text Image Confidence
 Given a 24x24 image valid skill icon but no text overlay,
 When the model processes the image,
-Then it should return the label 'NA'.
+Then the maximum confidence score for any class (0-9, A-Z) should be < 0.6.
 
 ### Requirement: Input Preprocessing
 The system MUST preprocess inputs consistently.
@@ -66,4 +67,3 @@ Then it should correctly distinguish them with > 90% accuracy on test set.
 **Label Map Convention**:
 - 0-9: Digits
 - 10-35: Letters A-Z
-- 36: NA

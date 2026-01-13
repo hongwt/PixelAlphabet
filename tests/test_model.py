@@ -39,7 +39,7 @@ def test_residual_block():
 
 def test_model_instantiation():
     """Test PixelNet instantiation."""
-    model = create_model(num_classes=37, dropout_rate=0.3)
+    model = create_model(num_classes=36, dropout_rate=0.3)
     assert isinstance(model, PixelNet)
     
     num_params = model.get_num_params()
@@ -59,12 +59,12 @@ def test_forward_pass():
     # Single image
     x = torch.randn(1, 3, 24, 24)
     output = model(x)
-    assert output.shape == (1, 37)
+    assert output.shape == (1, 36)
     
     # Batch of images
     x = torch.randn(8, 3, 24, 24)
     output = model(x)
-    assert output.shape == (8, 37)
+    assert output.shape == (8, 36)
 
 
 def test_output_range():
@@ -92,7 +92,7 @@ def test_gradient_flow():
     model.train()
     
     x = torch.randn(2, 3, 24, 24, requires_grad=True)
-    labels = torch.randint(0, 37, (2,))
+    labels = torch.randint(0, 36, (2,))
     
     # Forward pass
     outputs = model(x)
@@ -141,7 +141,7 @@ def test_cuda_compatibility():
     output = model(x)
     
     assert output.device.type == 'cuda'
-    assert output.shape == (4, 37)
+    assert output.shape == (4, 36)
 
 
 if __name__ == '__main__':

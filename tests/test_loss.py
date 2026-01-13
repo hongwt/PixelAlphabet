@@ -15,8 +15,8 @@ def test_focal_loss():
     """Test FocalLoss."""
     loss_fn = FocalLoss(gamma=2.0, alpha=1.0)
     
-    pred = torch.randn(8, 37)
-    target = torch.randint(0, 37, (8,))
+    pred = torch.randn(8, 36)
+    target = torch.randint(0, 36, (8,))
     
     loss = loss_fn(pred, target)
     
@@ -28,8 +28,8 @@ def test_label_smoothing():
     """Test LabelSmoothingCrossEntropy."""
     loss_fn = LabelSmoothingCrossEntropy(epsilon=0.1)
     
-    pred = torch.randn(8, 37)
-    target = torch.randint(0, 37, (8,))
+    pred = torch.randn(8, 36)
+    target = torch.randint(0, 36, (8,))
     
     loss = loss_fn(pred, target)
     
@@ -46,8 +46,8 @@ def test_combined_loss():
         lambda_focal=0.5
     )
     
-    pred = torch.randn(8, 37)
-    target = torch.randint(0, 37, (8,))
+    pred = torch.randn(8, 36)
+    target = torch.randint(0, 36, (8,))
     
     loss = loss_fn(pred, target)
     
@@ -66,8 +66,8 @@ def test_combined_loss():
 
 def test_loss_gradients():
     """Test that gradients flow through loss functions."""
-    pred = torch.randn(4, 37, requires_grad=True)
-    target = torch.randint(0, 37, (4,))
+    pred = torch.randn(4, 36, requires_grad=True)
+    target = torch.randint(0, 36, (4,))
     
     # Test each loss function
     loss_functions = [
@@ -95,8 +95,8 @@ def test_loss_factory():
     for loss_type in loss_types:
         loss_fn = create_loss_function(loss_type)
         
-        pred = torch.randn(4, 37)
-        target = torch.randint(0, 37, (4,))
+        pred = torch.randn(4, 36)
+        target = torch.randint(0, 36, (4,))
         
         loss = loss_fn(pred, target)
         
@@ -106,8 +106,8 @@ def test_loss_factory():
 
 def test_label_smoothing_effect():
     """Test that label smoothing produces different loss than hard labels."""
-    pred = torch.randn(8, 37)
-    target = torch.randint(0, 37, (8,))
+    pred = torch.randn(8, 36)
+    target = torch.randint(0, 36, (8,))
     
     # Hard labels (CE)
     ce_loss = torch.nn.CrossEntropyLoss()
@@ -125,12 +125,12 @@ def test_label_smoothing_effect():
 def test_focal_loss_focusing():
     """Test that focal loss down-weights easy examples."""
     # Create predictions with high confidence (easy example)
-    easy_pred = torch.zeros(1, 37)
+    easy_pred = torch.zeros(1, 36)
     easy_pred[0, 5] = 10.0  # Very confident prediction
     easy_target = torch.tensor([5])
     
     # Create predictions with low confidence (hard example)
-    hard_pred = torch.zeros(1, 37)
+    hard_pred = torch.zeros(1, 36)
     hard_pred[0, 5] = 0.1  # Low confidence
     hard_target = torch.tensor([5])
     

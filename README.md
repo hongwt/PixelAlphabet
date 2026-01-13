@@ -5,7 +5,7 @@
 
 - **Optimized CNN Architecture**: Efficient ResNet-style network with SE Attention (~1M params)
 - **24x24 Native Resolution**: Direct processing without upscaling
-- **37 Classes**: Digits (0-9), Letters (A-Z), and 'NA' for non-character images
+- **36 Classes**: Digits (0-9) and Letters (A-Z)
 - **Robust to Variations**: Handles different backgrounds, fonts, and similar characters (0/O, I/l)
 - **Enhanced Data Augmentation**: Color jitter, geometric transforms, blur, sharpness, and noise
 - **Advanced Loss Functions**: Combined Focal Loss + Label Smoothing (Built-in)
@@ -108,7 +108,7 @@ data/
 │   ├── 1/
 │   ├── A/
 │   ├── B/
-│   └── NA/
+│   └── ...
 ├── val/
 │   └── ...
 └── test/
@@ -174,7 +174,7 @@ pytest --cov=src tests/
 2. **Residual Block 1**: 64→128 channels, 24x24
 3. **Residual Block 2**: 128→256 channels, 24x24→12x12 (Stride 2)
 4. **SE Attention**: Squeeze-and-Excitation Block (Channel Attention)
-5. **Global Average Pooling** + **FC Layers** (256→128→37) with Dropout (0.3)
+5. **Global Average Pooling** + **FC Layers** (256→128→36) with Dropout (0.3)
 
 ## Development
 

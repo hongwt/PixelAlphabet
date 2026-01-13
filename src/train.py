@@ -171,7 +171,7 @@ def main(args):
     
     # Create model
     print("\nInitializing model...")
-    model = create_model(num_classes=37, dropout_rate=args.dropout)
+    model = create_model(num_classes=36, dropout_rate=args.dropout)
     model = model.to(device)
     
     # Loss function (Hardcoded to Combined Loss as per requirements)

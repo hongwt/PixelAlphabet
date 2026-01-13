@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
 
-# Default character set (excludes I and O to avoid confusion with 1 and 0)
+# Default character set: 0-9 and A-Z (36 classes total)
 DEFAULT_CHARSET = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Required font files from Fonts directory
@@ -383,10 +383,6 @@ class DataGenerator:
                 if self.sampling_rate < 1.0:
                     if random.random() > self.sampling_rate:
                         continue  # Skip this character based on sampling rate
-                
-                # Additional random skip to reduce total dataset size (~50% reduction)
-                if random.random() > 0.5:
-                    continue
                 
                 try:
                     # Random font selection
