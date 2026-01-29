@@ -153,6 +153,44 @@ images = ['img1.png', 'img2.png', 'img3.png']
 results = predictor.predict_batch(images)
 ```
 
+### Layer Visualization (NEW! 🎨)
+
+Visualize what each layer of the model learns:
+
+```bash
+# Quick visualization of a test image
+python visualize_layers.py
+
+# Or specify an image
+python -m src.inference \
+    --checkpoint checkpoints/best_model.pth \
+    --image data/test/A/image_0001.png \
+    --visualize
+
+# Compare confusing character pairs (0 vs Q, 8 vs B, etc.)
+python compare_characters.py --mode confusion
+
+# Visualize all character classes
+python compare_characters.py --mode all
+```
+
+Then view in TensorBoard:
+```bash
+tensorboard --logdir logs/layer_visualization
+# Open http://localhost:6006
+```
+
+**What you'll see:**
+- 🖼️ Feature maps from each convolutional layer
+- 🎯 Attention mechanism highlighting important features
+- 📊 How the image transforms through the network
+- 🔍 Which features the model focuses on
+
+For detailed documentation, see:
+- [Quick Start Guide](QUICKSTART_VISUALIZATION.md)
+- [Detailed Documentation](LAYER_VISUALIZATION.md)
+- [Implementation Summary](IMPLEMENTATION_SUMMARY.md)
+
 ### Testing
 
 ```bash

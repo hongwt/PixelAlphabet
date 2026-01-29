@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 def parse_filename(filename: str) -> Optional[str]:
     """
-    Extract label from filename following the pattern: valid_<label>_<timestamp>.png
+    Extract label from filename following the pattern: <prefix>_<label>_<timestamp>.png
     
     Args:
-        filename: The filename to parse (e.g., "valid_5_1746581875.7011735.png")
+        filename: The filename to parse (e.g., "valid_5_1746581875.7011735.png" or "LowConfidence_Q_1768563443.4519608.png")
         
     Returns:
         The extracted label if valid (single character 0-9, A-Z, or 'NA'), None otherwise
@@ -36,13 +36,17 @@ def parse_filename(filename: str) -> Optional[str]:
         'A'
         >>> parse_filename("valid_NA_12345.png")
         'NA'
+        >>> parse_filename("LowConfidence_Q_1768563443.4519608.png")
+        'Q'
+        >>> parse_filename("LowConfidence_3_1769264648.7200632.png")
+        '3'
         >>> parse_filename("invalid_5_12345.png")
         None
     """
     # Pattern: <prefix>_<label>_<timestamp>.png
-    # Prefix must be "valid" (case-insensitive)
+    # Prefix must be "valid" or "LowConfidence" (case-insensitive)
     # Label can be single character (0-9, A-Z) or 'NA'
-    pattern = r'^valid_(NA|[0-9A-Z])_[^_]+\.png$'
+    pattern = r'^(?:valid|LowConfidence)_(NA|[0-9A-Z])_[^_]+\.png$'
     
     match = re.match(pattern, filename, re.IGNORECASE)
     if match:

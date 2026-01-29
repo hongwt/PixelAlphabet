@@ -252,7 +252,8 @@ class DataGenerator:
         split: str = "train",
         charset: str = DEFAULT_CHARSET,
         font_size_range: Tuple[int, int] = (10, 24),
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        variations_per_sample: int = 3
     ):
         """
         Initialize DataGenerator.
@@ -265,6 +266,7 @@ class DataGenerator:
             charset: Characters to generate samples for
             font_size_range: (min, max) font size in pixels
             seed: Random seed for reproducibility
+            variations_per_sample: Number of variations to generate per icon-character pair
         """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir) / split
@@ -273,6 +275,7 @@ class DataGenerator:
         self.charset = charset
         self.font_size_range = font_size_range
         self.seed = seed
+        self.variations_per_sample = variations_per_sample
         
         # Get sampling rate for this split
         self.sampling_rate = self.SPLIT_SAMPLING_RATES.get(split, 1.0)
@@ -293,6 +296,7 @@ class DataGenerator:
         
         logger.info(f"DataGenerator initialized with {len(self.fonts)} fonts")
         logger.info(f"Character set: {self.charset} ({len(self.charset)} chars)")
+        logger.info(f"Variations per sample: {self.variations_per_sample}")
         logger.info(f"Sampling rate: {self.sampling_rate:.0%} (split={self.split})")
         logger.info(f"Output structure: {self.output_dir}/<char>/")
     
@@ -384,31 +388,33 @@ class DataGenerator:
                     if random.random() > self.sampling_rate:
                         continue  # Skip this character based on sampling rate
                 
-                try:
-                    # Random font selection
-                    font_idx = random.randint(0, len(self.fonts) - 1)
-                    font_spec = self.fonts[font_idx]
-                    font_size = random.randint(*self.font_size_range)
+                # Generate multiple variations for each icon-character pair
+                for variation_idx in range(self.variations_per_sample):
+                    try:
+                        # Random font selection
+                        font_idx = random.randint(0, len(self.fonts) - 1)
+                        font_spec = self.fonts[font_idx]
+                        font_size = random.randint(*self.font_size_range)
+                        
+                        # Load font
+                        font = create_font(font_spec, font_size)
+                        if font is None:
+                            font = get_fallback_font(font_size)
+                        
+                        # Random position offsets
+                        offset_x = random.randint(0, 26)
+                        offset_y = random.randint(0, 26)
                     
-                    # Load font
-                    font = create_font(font_spec, font_size)
-                    if font is None:
-                        font = get_fallback_font(font_size)
-                    
-                    # Random position offsets
-                    offset_x = random.randint(0, 26)
-                    offset_y = random.randint(0, 26)
-                    
-                    # Generate sample
-                    self._generate_sample(
-                        resized, char, font, font_idx, 
-                        offset_x, offset_y, icon_name
-                    )
-                    samples_generated += 1
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to generate sample for '{char}' in {icon_name}: {e}")
-                    self.total_errors += 1
+                        # Generate sample
+                        self._generate_sample(
+                            resized, char, font, font_idx, 
+                            offset_x, offset_y, icon_name, variation_idx
+                        )
+                        samples_generated += 1
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to generate sample for '{char}' (var {variation_idx}) in {icon_name}: {e}")
+                        self.total_errors += 1
             
             return samples_generated
             
@@ -425,7 +431,8 @@ class DataGenerator:
         font_idx: int,
         offset_x: int,
         offset_y: int,
-        icon_name: str
+        icon_name: str,
+        variation_idx: int = 0
     ) -> None:
         """
         Generate a single training sample.
@@ -438,6 +445,7 @@ class DataGenerator:
             offset_x: X offset for patch extraction
             offset_y: Y offset for patch extraction
             icon_name: Original icon filename
+            variation_idx: Index of the variation (for unique filenames)
         """
         # Extract 24x24 patch from icon
         # Note: icon is 50x50, we want to extract 24x24 starting at (26-offset_x, offset_y)
@@ -451,20 +459,55 @@ class DataGenerator:
         # Create drawing context
         draw = ImageDraw.Draw(patch)
         
-        # Measure text size
-        text_width, text_height = measure_text_size(char, font)
+        # Get text bounding box for precise positioning
+        bbox = draw.textbbox((0, 0), char, font=font)
         
-        # Calculate text position (Centered with random jitter)
-        # Center of the 24x24 patch
-        center_x = (patch.width - text_width) // 2
-        center_y = (patch.height - text_height) // 2
+        # Calculate max x/y to align with top-right corner
+        # Account for 1px outline
+        # Right edge: x + bbox[2] + 1 = patch.width  => x = patch.width - bbox[2] - 1
+        # Top edge: y + bbox[1] - 1 = 0              => y = 1 - bbox[1]
         
-        # Add random jitter (±6 pixels) to increase position diversity
-        jitter_x = random.randint(-6, 6)
-        jitter_y = random.randint(-6, 6)
+        target_x = patch.width - bbox[2] - 1
+        target_y = 1 - bbox[1]
         
-        text_x = center_x + jitter_x
-        text_y = center_y + jitter_y
+        # Calculate boundaries (valid range for x and y)
+        # Left edge: x + bbox[0] - 1 >= 0           => x >= 1 - bbox[0]
+        # Bottom edge: y + bbox[3] + 1 <= patch.height => y <= patch.height - bbox[3] - 1
+        
+        min_x = 1 - bbox[0]
+        max_y = patch.height - bbox[3] - 1
+        
+        # Add small random jitter (0-2px) away from corner for slight variation
+        # Moving away from top-right means x decreases, y increases
+        jitter_x = random.randint(0, 2)
+        jitter_y = random.randint(0, 2)
+        
+        text_x = target_x - jitter_x
+        text_y = target_y + jitter_y
+        
+        # Ensure we don't exceed boundaries (clamp)
+        # Check limits to keep text fully inside image
+        
+        # Clamp Left
+        if text_x < min_x:
+            text_x = min_x
+            
+        # Clamp Bottom
+        if text_y > max_y:
+            text_y = max_y
+            
+        # Re-verify Top/Right (in case min/max constraints forced us out, or jitter was weird)
+        # But if the text is physically too big (min_x > target_x or target_y > max_y),
+        # we must violate one side. 
+        # "Do not exceed boundaries" AND "Close to Top Right".
+        # If we clip Right/Top, we look cropped.
+        # If we clip Left/Bottom, we also look cropped.
+        # Let's bias towards keeping Top-Right visible if it's too big (since that's the requested location).
+        
+        if text_x > target_x:
+            text_x = target_x
+        if text_y < target_y:
+            text_y = target_y
         
         # Ensure extremely large fonts don't position completely off-screen
         # But allow partial overlap as that is good for robustness
@@ -474,7 +517,7 @@ class DataGenerator:
         
         # Generate output filename and save to character-specific subdirectory
         position_hash = (offset_x + 1) * (offset_y + 1)
-        output_name = f"{icon_name}_FONT{font_idx}_{position_hash}.png"
+        output_name = f"{icon_name}_FONT{font_idx}_{position_hash}_v{variation_idx}.png"
         char_dir = self.output_dir / char
         output_path = char_dir / output_name
         
@@ -578,6 +621,13 @@ Example usage:
     )
     
     parser.add_argument(
+        "--variations",
+        type=int,
+        default=3,
+        help="Number of variations to generate per icon-character pair (default: 3)"
+    )
+    
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -616,7 +666,8 @@ Example usage:
             split=args.split,
             charset=args.charset,
             font_size_range=font_size_range,
-            seed=args.seed
+            seed=args.seed,
+            variations_per_sample=args.variations
         )
         
         # Generate dataset
