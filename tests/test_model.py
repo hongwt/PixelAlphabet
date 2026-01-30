@@ -1,5 +1,5 @@
 """
-Tests for PixelNet model (Simplified)
+Tests for PixelNet model (Optimized Architecture)
 """
 import pytest
 import torch
@@ -7,8 +7,60 @@ from src.model import (
     PixelNet, 
     create_model, 
     SEBlock, 
-    ResidualBlock
+    ResidualBlock,
+    CoordConv,
+    SpatialAttention,
+    CBAM,
+    ResBlockSE
 )
+
+
+def test_coord_conv():
+    """Test CoordConv module."""
+    coord_conv = CoordConv(3, 64, kernel_size=3, stride=1, padding=1)
+    x = torch.randn(2, 3, 24, 24)
+    
+    output = coord_conv(x)
+    
+    assert output.shape == (2, 64, 24, 24), f"Expected (2, 64, 24, 24), got {output.shape}"
+    assert torch.isfinite(output).all(), "Output should not contain inf or nan"
+
+
+def test_spatial_attention():
+    """Test SpatialAttention module."""
+    spatial_att = SpatialAttention(kernel_size=7)
+    x = torch.randn(2, 256, 12, 12)
+    
+    output = spatial_att(x)
+    
+    assert output.shape == x.shape, "Output shape should match input shape"
+    assert torch.isfinite(output).all(), "Output should not contain inf or nan"
+
+
+def test_cbam():
+    """Test CBAM (Channel + Spatial Attention) module."""
+    cbam = CBAM(channels=256, reduction=16, spatial_kernel=7)
+    x = torch.randn(2, 256, 12, 12)
+    
+    output = cbam(x)
+    
+    assert output.shape == x.shape, "Output shape should match input shape"
+    assert torch.isfinite(output).all(), "Output should not contain inf or nan"
+
+
+def test_res_block_se():
+    """Test ResBlockSE (Residual Block with SE attention)."""
+    # Without stride
+    block = ResBlockSE(64, 64, stride=1)
+    x = torch.randn(2, 64, 24, 24)
+    output = block(x)
+    assert output.shape == (2, 64, 24, 24)
+    
+    # With stride and channel change
+    block = ResBlockSE(64, 128, stride=2)
+    x = torch.randn(2, 64, 24, 24)
+    output = block(x)
+    assert output.shape == (2, 128, 12, 12)
 
 
 def test_se_block():
@@ -38,17 +90,44 @@ def test_residual_block():
 
 
 def test_model_instantiation():
-    """Test PixelNet instantiation."""
+    """Test PixelNet instantiation with default config."""
     model = create_model(num_classes=36, dropout_rate=0.3)
     assert isinstance(model, PixelNet)
     
     num_params = model.get_num_params()
     print(f"Model has {num_params:,} parameters")
     
-    # Should be relatively small (~500K-1.5M parameters)
-    # The optimized model (formerly LightPixelNet) is efficient
-    assert 400_000 < num_params < 2_000_000, \
-        f"Expected ~400K-2M params, got {num_params:,}"
+    # Optimized model should be ~1.2M-1.5M parameters
+    assert 1_000_000 < num_params < 2_000_000, \
+        f"Expected ~1M-2M params, got {num_params:,}"
+
+
+def test_model_configurations():
+    """Test PixelNet with different configurations."""
+    # Default (CoordConv + CBAM)
+    model_default = create_model()
+    assert model_default.use_coord_conv is True
+    assert model_default.attention_type == 'cbam'
+    
+    # Without CoordConv
+    model_no_coord = create_model(use_coord_conv=False)
+    assert model_no_coord.use_coord_conv is False
+    
+    # SE attention only
+    model_se = create_model(attention_type='se')
+    assert model_se.attention_type == 'se'
+    
+    # No attention
+    model_none = create_model(attention_type='none')
+    assert model_none.attention_type == 'none'
+    
+    # All should produce valid output
+    x = torch.randn(2, 3, 24, 24)
+    for model in [model_default, model_no_coord, model_se, model_none]:
+        model.eval()
+        with torch.no_grad():
+            output = model(x)
+        assert output.shape == (2, 36)
 
 
 def test_forward_pass():

@@ -206,13 +206,22 @@ pytest --cov=src tests/
 
 ## Model Architecture
 
-**PixelNet** (Optimized):
+**PixelNet** (Optimized v2):
 
-1. **Initial Conv Block**: 3→64 channels, 24x24 (No downsampling)
-2. **Residual Block 1**: 64→128 channels, 24x24
-3. **Residual Block 2**: 128→256 channels, 24x24→12x12 (Stride 2)
-4. **SE Attention**: Squeeze-and-Excitation Block (Channel Attention)
-5. **Global Average Pooling** + **FC Layers** (256→128→36) with Dropout (0.3)
+1. **CoordConv Block**: Position-aware conv (3+2→64), 24x24 - Adds spatial coordinates for position encoding
+2. **ResBlockSE 1**: 64→64 channels, 24x24 (with SE attention)
+3. **ResBlockSE 2**: 64→128 channels, 24x24 (with SE attention)
+4. **ResBlockSE 3**: 128→256 channels, 24x24→12x12 (Stride 2, with SE attention)
+5. **CBAM Attention**: Combined Channel + Spatial Attention
+6. **Global Average Pooling** + **FC Layers** (256→128→36) with BatchNorm and Dropout (0.3)
+
+**Key Features**:
+- **CoordConv**: Position encoding helps distinguish rotation-similar characters (6/9, b/d)
+- **ResBlockSE**: SE attention integrated in each residual block for channel recalibration
+- **CBAM**: Final attention combines channel and spatial focus for better character localization
+- **Configurable**: `use_coord_conv` and `attention_type` parameters for flexibility
+
+**Parameters**: ~1.28M (lightweight and efficient)
 
 ## Development
 
