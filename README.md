@@ -97,7 +97,34 @@ data/
 
 See the original Java implementation in [AutoGenImage.java](AutoGenImage.java) for reference.
 
-#### Option 2: Manual Organization
+#### Option 2: Import Real Game Screenshots
+
+Import real screenshot data with automated label parsing:
+
+```bash
+# Import real data with automatic random split
+python -m src.data_importer \
+    --source ./real_data \
+    --target ./data \
+    --ratios 0.75,0.15,0.10 \
+    --seed 42
+
+# Dry-run to preview without copying
+python -m src.data_importer --dry-run
+```
+
+The data importer will:
+- Parse filenames following pattern: `<prefix>_<label>_<timestamp>.png`
+  - Example: `valid_5_1746581875.png` → label='5'
+  - Example: `LowConfidence_Q_1768563443.png` → label='Q'
+- Automatically split data into train/val/test sets (default: 75%/15%/10%)
+- Handle filename collisions with hash suffixes
+- Provide detailed statistics and logging
+
+**Input**: Real screenshot images in `real_data/` directory  
+**Output**: Organized dataset ready for training
+
+#### Option 3: Manual Organization
 
 Alternatively, organize your data manually as follows:
 
