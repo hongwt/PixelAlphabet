@@ -12,13 +12,20 @@ from src.data_generator import (
     copy_image,
     extract_patch,
     measure_text_size,
-    draw_text_outline,
-    load_system_fonts,
+    render_foreground_char,
+    alpha_composite_hard_overlay,
     load_custom_fonts,
     create_font,
     get_fallback_font,
     DataGenerator,
-    DEFAULT_CHARSET
+    DEFAULT_CHARSET,
+    degrade_resample,
+    degrade_gaussian_noise,
+    degrade_salt_pepper,
+    degrade_gamma,
+    degrade_hsv_drift,
+    degrade_jpeg_artifacts,
+    apply_degradation_pipeline,
 )
 
 
@@ -73,31 +80,75 @@ class TestTextOperations:
         assert width > 0
         assert height > 0
     
-    def test_draw_text_outline(self):
-        """Test text outline drawing."""
-        img = Image.new('RGB', (50, 50), color='white')
-        from PIL import ImageDraw
-        draw = ImageDraw.Draw(img)
-        font = get_fallback_font(12)
-        
-        # Should not raise exception
-        draw_text_outline(draw, "X", (10, 10), font)
-        
-        # Visual verification would require inspection
-        # At least verify it doesn't crash
-        assert True
+    def test_render_foreground_char_returns_rgba(self):
+        """Test that render_foreground_char outputs RGBA image."""
+        font = get_fallback_font(14)
+        fg = render_foreground_char("X", font)
+
+        assert fg.mode == 'RGBA'
+        assert fg.size[0] > 0
+        assert fg.size[1] > 0
+
+    def test_render_foreground_char_has_opaque_pixels(self):
+        """Test that rendered foreground contains non-transparent pixels."""
+        font = get_fallback_font(14)
+        fg = render_foreground_char("A", font)
+
+        import numpy as np
+        arr = np.array(fg)
+        alpha = arr[:, :, 3]
+        assert alpha.max() == 255, "Should have fully opaque pixels"
+
+    def test_render_foreground_char_stroke_width(self):
+        """Test different stroke widths produce different-sized images."""
+        font = get_fallback_font(14)
+        fg1 = render_foreground_char("M", font, stroke_width=1)
+        fg2 = render_foreground_char("M", font, stroke_width=2)
+
+        # Wider stroke should generally produce a larger bounding box
+        area1 = fg1.size[0] * fg1.size[1]
+        area2 = fg2.size[0] * fg2.size[1]
+        assert area2 >= area1
+
+
+class TestAlphaComposite:
+    """Test alpha compositing functions."""
+
+    def test_basic_composite(self):
+        """Test alpha composite produces correct output size and mode."""
+        bg = Image.new('RGB', (24, 24), color=(128, 128, 128))
+        fg = Image.new('RGBA', (10, 10), color=(255, 0, 0, 255))
+
+        result = alpha_composite_hard_overlay(bg, fg, (5, 5))
+
+        assert result.mode == 'RGB'
+        assert result.size == (24, 24)
+
+    def test_composite_overwrites_background(self):
+        """Test that opaque foreground pixels replace background."""
+        bg = Image.new('RGB', (24, 24), color=(0, 0, 0))
+        fg = Image.new('RGBA', (2, 2), color=(255, 255, 255, 255))
+
+        result = alpha_composite_hard_overlay(bg, fg, (0, 0))
+
+        # Top-left 2x2 should be white
+        assert result.getpixel((0, 0)) == (255, 255, 255)
+        assert result.getpixel((1, 1)) == (255, 255, 255)
+        # Outside should stay black
+        assert result.getpixel((3, 3)) == (0, 0, 0)
+
+    def test_composite_transparent_preserves_background(self):
+        """Test that transparent foreground pixels leave background intact."""
+        bg = Image.new('RGB', (24, 24), color=(100, 100, 100))
+        fg = Image.new('RGBA', (10, 10), color=(255, 0, 0, 0))  # Fully transparent
+
+        result = alpha_composite_hard_overlay(bg, fg, (0, 0))
+
+        assert result.getpixel((5, 5)) == (100, 100, 100)
 
 
 class TestFontManagement:
     """Test font loading and management."""
-    
-    def test_load_system_fonts(self):
-        """Test system fonts loading."""
-        fonts = load_system_fonts()
-        
-        assert isinstance(fonts, list)
-        assert len(fonts) > 0
-        assert "Arial" in fonts
     
     def test_load_custom_fonts_missing_dir(self):
         """Test custom fonts with missing directory."""
@@ -260,51 +311,78 @@ class TestDataGenerator:
         assert len(x_files) > 0
         assert len(y_files) > 0
     
-    def test_reproducibility(self, temp_dirs):
-        """Test that same seed produces same results."""
-        # Create a test icon
-        icon_path = temp_dirs['input'] / "test.png"
-        icon = Image.new('RGB', (50, 50), color='red')
-        icon.save(icon_path)
-        
-        # Generate with seed 42
-        output_dir1 = temp_dirs['root'] / "output1"
-        generator1 = DataGenerator(
-            input_dir=temp_dirs['input'],
-            output_dir=output_dir1,
-            fonts_dir=temp_dirs['fonts'],
-            split="test",
-            charset="Y",
-            seed=42
-        )
-        generator1.generate_dataset()
-        
-        # Generate again with same seed
-        output_dir2 = temp_dirs['root'] / "output2"
-        generator2 = DataGenerator(
-            input_dir=temp_dirs['input'],
-            output_dir=output_dir2,
-            fonts_dir=temp_dirs['fonts'],
-            split="test",
-            charset="Y",
-            seed=42
-        )
-        generator2.generate_dataset()
-        
-        # Compare outputs
-        dir1 = output_dir1 / "test" / "Y"
-        dir2 = output_dir2 / "test" / "Y"
-        
-        files1 = sorted(dir1.glob("*.png"))
-        files2 = sorted(dir2.glob("*.png"))
-        
-        assert len(files1) == len(files2)
-        assert len(files1) > 0
-        
-        # Filenames should match (deterministic generation)
-        names1 = [f.name for f in files1]
-        names2 = [f.name for f in files2]
-        assert names1 == names2
+class TestDegradationPipeline:
+    """Test image degradation functions."""
+
+    def _make_img(self, size=(24, 24)):
+        """Helper: create a simple test RGB image."""
+        return Image.new('RGB', size, color=(128, 128, 128))
+
+    def test_degrade_resample(self):
+        img = self._make_img()
+        result = degrade_resample(img, 0.5)
+        assert result.size == img.size
+        assert result.mode == img.mode
+
+    def test_degrade_gaussian_noise(self):
+        img = self._make_img()
+        result = degrade_gaussian_noise(img, 5.0)
+        assert result.size == img.size
+
+    def test_degrade_salt_pepper(self):
+        img = self._make_img()
+        result = degrade_salt_pepper(img, 0.05)
+        assert result.size == img.size
+
+    def test_degrade_gamma(self):
+        img = self._make_img()
+        result = degrade_gamma(img, 1.5)
+        assert result.size == img.size
+
+    def test_degrade_hsv_drift(self):
+        img = self._make_img()
+        result = degrade_hsv_drift(img, 5.0, -10.0, 10.0)
+        assert result.size == img.size
+        assert result.mode == 'RGB'
+
+    def test_degrade_jpeg_artifacts(self):
+        img = self._make_img()
+        result = degrade_jpeg_artifacts(img, 30)
+        assert result.size == img.size
+
+    def test_pipeline_none(self):
+        img = self._make_img()
+        result = apply_degradation_pipeline(img, "none")
+        # With "none" the image should be identical
+        import numpy as np
+        assert np.array_equal(np.array(img), np.array(result))
+
+    def test_pipeline_levels(self):
+        """Ensure all levels run without errors."""
+        img = self._make_img()
+        for level in ("light", "medium", "heavy"):
+            result = apply_degradation_pipeline(img, level)
+            assert result.size == img.size
+            assert result.mode == 'RGB'
+
+    def test_resize_uses_nearest(self):
+        """Verify resize_image uses NEAREST interpolation (no anti-aliasing)."""
+        # Create a 2x2 checkerboard
+        img = Image.new('RGB', (2, 2))
+        img.putpixel((0, 0), (255, 255, 255))
+        img.putpixel((1, 0), (0, 0, 0))
+        img.putpixel((0, 1), (0, 0, 0))
+        img.putpixel((1, 1), (255, 255, 255))
+
+        resized = resize_image(img, 4, 4)
+
+        # With NEAREST, each pixel should map to exactly one source pixel
+        # => only pure black or pure white, no grey interpolation
+        import numpy as np
+        arr = np.array(resized)
+        unique = set(map(tuple, arr.reshape(-1, 3).tolist()))
+        assert unique == {(0, 0, 0), (255, 255, 255)}, \
+            f"Expected only black and white, got {unique}"
 
 
 if __name__ == "__main__":

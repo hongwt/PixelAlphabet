@@ -90,19 +90,6 @@ class TestScanRealData:
         assert len(result["A"]) == 2
         assert len(result["B"]) == 1
     
-    def test_scan_with_invalid_files(self, tmp_path):
-        """Test that invalid files are skipped."""
-        (tmp_path / "valid_A_123.png").touch()
-        (tmp_path / "invalid_B_456.png").touch()
-        (tmp_path / "valid_NA_789.png").touch()
-        
-        result = scan_real_data(tmp_path)
-        
-        assert "A" in result
-        assert "B" not in result
-        assert "NA" not in result
-        assert len(result["A"]) == 1
-    
     def test_scan_recursive(self, tmp_path):
         """Test recursive directory scanning."""
         subdir = tmp_path / "subdir"

@@ -15,39 +15,61 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.model import create_model
 from src.dataset import get_dataloader, label_to_char, char_to_label
-from src.loss import FocalLoss, create_loss_function
+from src.loss import (
+    FocalLoss,
+    CombinedLoss,
+    ConfusionPairContrastiveLoss,
+    create_loss_function,
+    CONFUSED_PAIRS,
+)
 
+
+# ---------------------------------------------------------------------------
+# Confusion monitoring – covers all 8 predefined confusable pairs
+# ---------------------------------------------------------------------------
 
 def log_confusion_matrix(preds, targets, writer, epoch):
     """
-    Log specific confusion cases (Q vs 0, 8 vs B) and specific matrix.
+    Log bidirectional confusion counts for all predefined confusable pairs.
     """
-    # Key indices
+    # Build index map for all monitored pairs
     try:
-        idx_0 = char_to_label('0')
-        idx_Q = char_to_label('Q')
-        idx_8 = char_to_label('8')
-        idx_B = char_to_label('B')
+        pair_indices = [
+            (char_to_label(a), char_to_label(b), a, b)
+            for a, b in CONFUSED_PAIRS
+        ]
     except ValueError:
-        return # Skip if labels not found
+        return  # Skip if labels not found
 
-    confusion = {
-        '0_as_Q': 0, 'Q_as_0': 0,
-        '8_as_B': 0, 'B_as_8': 0
-    }
+    # Count confusions
+    confusion = {}
+    for idx_a, idx_b, char_a, char_b in pair_indices:
+        key_ab = f'{char_a}_as_{char_b}'
+        key_ba = f'{char_b}_as_{char_a}'
+        confusion[key_ab] = 0
+        confusion[key_ba] = 0
 
     for p, t in zip(preds, targets):
-        if t == idx_0 and p == idx_Q: confusion['0_as_Q'] += 1
-        if t == idx_Q and p == idx_0: confusion['Q_as_0'] += 1
-        if t == idx_8 and p == idx_B: confusion['8_as_B'] += 1
-        if t == idx_B and p == idx_8: confusion['B_as_8'] += 1
-    
-    print(f"  [Confusion] Q->0: {confusion['Q_as_0']}, 0->Q: {confusion['0_as_Q']}")
-    print(f"  [Confusion] 8->B: {confusion['8_as_B']}, B->8: {confusion['B_as_8']}")
-    
+        for idx_a, idx_b, char_a, char_b in pair_indices:
+            if t == idx_a and p == idx_b:
+                confusion[f'{char_a}_as_{char_b}'] += 1
+            if t == idx_b and p == idx_a:
+                confusion[f'{char_b}_as_{char_a}'] += 1
+
+    # Print to console
+    for idx_a, idx_b, char_a, char_b in pair_indices:
+        ab = confusion[f'{char_a}_as_{char_b}']
+        ba = confusion[f'{char_b}_as_{char_a}']
+        print(f"  [Confusion] {char_a}->{char_b}: {ab}, {char_b}->{char_a}: {ba}")
+
+    # Log to TensorBoard
     if writer:
-        writer.add_scalars('Confusion/Q_0', {'Q_as_0': confusion['Q_as_0'], '0_as_Q': confusion['0_as_Q']}, epoch)
-        writer.add_scalars('Confusion/8_B', {'8_as_B': confusion['8_as_B'], 'B_as_8': confusion['B_as_8']}, epoch)
+        for idx_a, idx_b, char_a, char_b in pair_indices:
+            tag = f'Confusion/{char_a}_{char_b}'
+            writer.add_scalars(tag, {
+                f'{char_a}_as_{char_b}': confusion[f'{char_a}_as_{char_b}'],
+                f'{char_b}_as_{char_a}': confusion[f'{char_b}_as_{char_a}'],
+            }, epoch)
 
 def train_one_epoch(
     model: nn.Module,
@@ -59,7 +81,11 @@ def train_one_epoch(
 ) -> tuple:
     """
     Train for one epoch.
-    
+
+    If ``criterion`` is a ``CombinedLoss`` with a contrastive component,
+    features are extracted via ``model.forward_features()`` and passed to
+    the loss function.
+
     Returns:
         (avg_loss, accuracy)
     """
@@ -67,34 +93,47 @@ def train_one_epoch(
     running_loss = 0.0
     correct = 0
     total = 0
-    
+
+    # Detect whether we need to supply features
+    needs_features = (
+        isinstance(criterion, CombinedLoss)
+        and criterion.contrastive_loss is not None
+    )
+
     for batch_idx, (images, labels) in enumerate(dataloader):
         images, labels = images.to(device), labels.to(device)
-        
-        # Forward pass
+
         optimizer.zero_grad()
+
+        # Forward pass
         outputs = model(images)
-        loss = criterion(outputs, labels)
-        
+
+        # Optionally extract features for contrastive loss
+        if needs_features:
+            features = model.forward_features(images)
+            loss = criterion(outputs, labels, features)
+        else:
+            loss = criterion(outputs, labels)
+
         # Backward pass
         loss.backward()
         optimizer.step()
-        
+
         # Statistics
         running_loss += loss.item()
         _, predicted = torch.max(outputs.data, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
-        
+
         # Print progress
         if (batch_idx + 1) % 50 == 0:
             batch_acc = 100 * correct / total
             print(f"  Batch [{batch_idx+1}/{len(dataloader)}] "
                   f"Loss: {loss.item():.4f} Acc: {batch_acc:.2f}%")
-    
+
     avg_loss = running_loss / len(dataloader)
     accuracy = 100 * correct / total
-    
+
     return avg_loss, accuracy
 
 
@@ -174,15 +213,16 @@ def main(args):
     model = create_model(num_classes=36, dropout_rate=args.dropout)
     model = model.to(device)
     
-    # Loss function (Hardcoded to Combined Loss as per requirements)
+    # Loss function: FocalLabelSmoothing + Contrastive (optimized for confusable chars)
     criterion = create_loss_function(
         'combined',
-        use_focal=True,
-        use_label_smoothing=True,
         smoothing=0.1,
-        lambda_focal=0.5
+        focal_gamma=3.0,
+        use_contrastive=True,
+        lambda_contrastive=0.3,
+        contrastive_margin=0.5,
     )
-    print("Using loss function: Combined (Focal + Label Smoothing)")
+    print("Using loss function: Combined (FocalLabelSmoothing + Contrastive)")
     
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)

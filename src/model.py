@@ -315,36 +315,57 @@ class PixelNet(nn.Module):
             nn.Linear(128, num_classes)
         )
     
+    def _extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Shared backbone: returns the 256-dim embedding after GAP, before the
+        classifier head.
+
+        Args:
+            x: Input tensor (B, 3, 24, 24)
+
+        Returns:
+            Feature embedding (B, 256)
+        """
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.res_block1(x)  # (B, 64, 24, 24)
+        x = self.res_block2(x)  # (B, 128, 24, 24)
+        x = self.res_block3(x)  # (B, 256, 12, 12)
+
+        x = self.attention(x)
+
+        x = self.global_avg_pool(x)  # (B, 256, 1, 1)
+        x = torch.flatten(x, 1)      # (B, 256)
+        return x
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: Input tensor (B, 3, 24, 24)
-        
+
         Returns:
             Logits (B, num_classes)
         """
-        # Initial conv block with optional position encoding
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        
-        # Residual blocks with SE attention
-        x = self.res_block1(x)  # (B, 64, 24, 24)
-        x = self.res_block2(x)  # (B, 128, 24, 24)
-        x = self.res_block3(x)  # (B, 256, 12, 12)
-        
-        # Apply final attention (CBAM/SE/None)
-        x = self.attention(x)
-        
-        # Global pooling
-        x = self.global_avg_pool(x)  # (B, 256, 1, 1)
-        x = torch.flatten(x, 1)  # (B, 256)
-        
-        # Classifier head
-        x = self.classifier(x)
-        
-        return x
-    
+        features = self._extract_features(x)
+        return self.classifier(features)
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Return the 256-dimensional embedding vector after Global Average
+        Pooling but before the classification head.
+
+        Useful for contrastive loss computation on the feature space.
+
+        Args:
+            x: Input tensor (B, 3, 24, 24)
+
+        Returns:
+            Feature embedding (B, 256)
+        """
+        return self._extract_features(x)
+
     def get_num_params(self) -> int:
         """Calculate total number of trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

@@ -7,13 +7,12 @@ TBD - created by archiving change add-data-generation. Update Purpose after arch
 The system MUST process game skill icon images as source backgrounds.
 - Accept PNG format images from configurable directory
 - Recursively discover all `.png` files in input directory tree
-- Resize source icons to 50x50 pixels before patch extraction
+- Resize source icons to 50×50 pixels using **NEAREST neighbor interpolation** to preserve pixel-art hard edges
 - Handle corrupted or unsupported images gracefully (log warning, skip)
 
-#### Scenario: Batch Icon Processing
-Given a directory containing 100 skill icon PNG files,
-When the data generator runs,
-Then it should successfully process all valid icons and log errors for any corrupted files without stopping.
+#### Scenario: Nearest Neighbor Resize
+- **WHEN** a 256×256 skill icon is resized to 50×50
+- **THEN** the resized image SHALL contain only colors present in the original (no interpolation-generated intermediate colors)
 
 ### Requirement: Random Patch Extraction
 The system MUST extract random 24x24 pixel patches from skill icons.
@@ -40,16 +39,22 @@ When generating 100 samples,
 Then the output should include instances rendered in at least 15 different fonts.
 
 ### Requirement: Styled Text Overlay
-The system MUST render text with black outline and white fill for visibility.
-- Outline: Draw character in black at 8 surrounding positions (±1 pixel offset in x and y)
-- Fill: Draw character in white at center position
-- Text position: Bottom-right alignment (3px margins from edges)
-- Measure text dimensions to calculate exact position
+The system MUST render foreground characters on a separate RGBA transparent canvas using Pillow native stroke API, then composite onto background via Alpha blending.
 
-#### Scenario: High Contrast Text
-Given a skill icon with dark blue background,
-When overlaying character 'Z' with white text and black outline,
-Then the character should be clearly readable against the background.
+- Foreground rendering on RGBA canvas: `fill=(255,255,255,255)`, `stroke_fill=(0,0,0,255)`
+- Use Pillow `stroke_width` and `stroke_fill` parameters for pixel-perfect outline rendering
+- Stroke width: randomized between 1 and 2 pixels for diversity
+- Crop foreground to tight bounding box via `getbbox()` before compositing
+- Alpha compositing SHALL produce hard overlay (binary alpha: 0 or 255, no anti-aliased transition)
+- Final output remains 24×24 pixels RGB PNG
+
+#### Scenario: RGBA Foreground Rendering
+- **WHEN** character 'A' is rendered with stroke_width=1
+- **THEN** the foreground RGBA image SHALL contain only pixels with alpha=255 (text and outline) or alpha=0 (transparent), with no intermediate values
+
+#### Scenario: Hard Overlay Compositing
+- **WHEN** a white-on-black-outline character is composited onto a complex game background
+- **THEN** the character pixels SHALL completely replace background pixels (no color blending or feathering at edges)
 
 ### Requirement: Output Format
 The system MUST generate training images in a structured format.
@@ -121,4 +126,31 @@ The system MUST handle errors without aborting entire batch.
 Given a batch of 100 icons where 3 are corrupted,
 When running data generation,
 Then the system should successfully process 97 icons and log warnings for the 3 failures.
+
+### Requirement: Image Degradation Pipeline
+The system MUST support an optional image degradation pipeline applied after compositing to simulate real-world capture artifacts.
+
+Each degradation operation SHALL be applied with independent random probability. The following operations are supported:
+1. **Low-fidelity spatial resampling**: Downsample to 40-80% of original size then upsample back, using NEAREST interpolation only
+2. **Gaussian noise injection**: Additive Gaussian noise with configurable sigma (default: 3-10)
+3. **Salt-and-pepper noise injection**: Random pixel corruption with configurable density (default: 0.5-2%)
+4. **Random Gamma correction**: Non-linear brightness adjustment with gamma range 0.7-1.4
+5. **HSV color space drift**: Random perturbation of Hue (±10°), Saturation (±15%), Value (±10%) channels
+6. **JPEG compression artifacts simulation**: Encode/decode at low quality (30-70) to introduce blockiness
+
+- CLI parameter `--degradation` controls overall intensity: `none` (default), `light`, `medium`, `heavy`
+- Each intensity level sets base probabilities for individual operations
+- Individual degradation params are tunable via config
+
+#### Scenario: Light Degradation
+- **WHEN** `--degradation light` is specified
+- **THEN** generated images SHOULD have subtle artifacts (e.g., minor noise or slight color shift) while characters remain clearly recognizable
+
+#### Scenario: Heavy Degradation
+- **WHEN** `--degradation heavy` is specified
+- **THEN** generated images SHOULD simulate worst-case real scenarios (combined resampling blur, noise, compression artifacts, and color shifts)
+
+#### Scenario: No Degradation
+- **WHEN** `--degradation none` is specified (or omitted)
+- **THEN** generated images SHALL be clean composites with no artificial degradation
 

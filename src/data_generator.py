@@ -6,6 +6,7 @@ onto game skill icon backgrounds.
 
 Based on AutoGenImage.java logic, reimplemented in Python.
 """
+import io
 import os
 import sys
 import logging
@@ -13,6 +14,8 @@ import random
 import argparse
 from pathlib import Path
 from typing import List, Tuple, Optional
+
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 # Default character set: 0-9 and A-Z (36 classes total)
@@ -49,7 +52,10 @@ logger = logging.getLogger(__name__)
 
 def resize_image(img: Image.Image, width: int, height: int) -> Image.Image:
     """
-    Resize image to specified dimensions using high-quality resampling.
+    Resize image to specified dimensions using nearest-neighbor resampling.
+    
+    Uses NEAREST interpolation to preserve pixel-art hard edges and avoid
+    anti-aliasing artifacts that break discrete high-frequency gradient features.
     
     Args:
         img: PIL Image to resize
@@ -59,7 +65,7 @@ def resize_image(img: Image.Image, width: int, height: int) -> Image.Image:
     Returns:
         Resized PIL Image
     """
-    return img.resize((width, height), Image.Resampling.LANCZOS)
+    return img.resize((width, height), Image.Resampling.NEAREST)
 
 
 def copy_image(img: Image.Image) -> Image.Image:
@@ -112,34 +118,132 @@ def measure_text_size(text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int
     return width, height
 
 
-def draw_text_outline(
-    draw: ImageDraw.Draw,
+def render_foreground_char(
     text: str,
-    position: Tuple[int, int],
     font: ImageFont.FreeTypeFont,
-    outline_color: str = 'black',
-    fill_color: str = 'white'
-) -> None:
+    fill_color: Tuple[int, ...] = (255, 255, 255, 255),
+    outline_color: Tuple[int, ...] = (0, 0, 0, 255),
+    stroke_width: int = 1,
+    shadow_offset: int = 0,
+    hard_edge: bool = False
+) -> Image.Image:
     """
-    Draw text with an outline effect (black outline, white fill).
-    
+    Render a single character as an RGBA foreground image.
+
+    Supports two rendering modes selected by ``hard_edge``:
+
+    **Smooth mode** (``hard_edge=False``, default)
+        Uses Pillow's native ``stroke_width`` / ``stroke_fill`` API with
+        standard anti-aliased font rendering.  Produces smoother edges with
+        grey transition pixels.
+
+    **Hard-edge mode** (``hard_edge=True``)
+        Emulates the WoW-style HUD rendering pipeline:
+        1. Anti-aliasing is disabled (``fontmode = "1"``) to produce binary
+           pixel edges identical to real game screenshots.
+        2. The outline is drawn via multi-offset passes (cardinal + diagonal)
+           instead of native ``stroke_width`` which may lose pixels in binary
+           mode.
+        3. Additional right-down offsets simulate the drop-shadow bias
+           visible in real game UI captures.
+
+    Both styles appear in real game screenshots, so callers should randomise
+    the choice for training-data diversity.
+
     Args:
-        draw: PIL ImageDraw object
-        text: Text to draw
-        position: (x, y) position for text
+        text: Character to render
         font: PIL ImageFont to use
-        outline_color: Color for outline (default: black)
-        fill_color: Color for text fill (default: white)
+        fill_color: RGBA fill color for the glyph (default: opaque white)
+        outline_color: RGBA stroke color (default: opaque black)
+        stroke_width: Stroke thickness in pixels (typically 1-2)
+        shadow_offset: Extra right-down shadow offset in pixels (0 = none,
+                       only used in hard-edge mode)
+        hard_edge: If True, disable anti-aliasing and use multi-offset
+                   outline + drop shadow.  If False, use native smooth stroke.
+
+    Returns:
+        RGBA PIL Image tightly cropped to the rendered glyph bounding box.
+        Transparent where no glyph pixels exist.
     """
-    x, y = position
-    
-    # Draw outline by rendering text at 9 positions (8 surrounding + center)
-    for dx in [-1, 0, 1]:
-        for dy in [-1, 0, 1]:
-            draw.text((x + dx, y + dy), text, font=font, fill=outline_color)
-    
-    # Draw main text on top
-    draw.text((x, y), text, font=font, fill=fill_color)
+    # Use a generous canvas so the glyph + stroke + shadow fits
+    canvas_size = (int(font.size * 3), int(font.size * 3))
+    img = Image.new('RGBA', canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    origin_x, origin_y = font.size, font.size
+
+    if hard_edge:
+        # --- Hard-edge (binary) rendering path ---
+        # Disable anti-aliasing for hard binary edges
+        draw.fontmode = "1"
+
+        # Multi-offset outline (cardinal + diagonal directions)
+        outline_offsets = set()
+        for sw in range(1, stroke_width + 1):
+            outline_offsets.update([
+                (-sw, 0), (sw, 0), (0, -sw), (0, sw),       # cardinal
+                (-sw, -sw), (sw, -sw), (-sw, sw), (sw, sw)   # diagonal
+            ])
+
+        for ox, oy in outline_offsets:
+            draw.text((origin_x + ox, origin_y + oy), text, font=font,
+                      fill=outline_color)
+
+        # Right-down drop shadow (thicker right/bottom border)
+        for s in range(1, shadow_offset + 1):
+            draw.text((origin_x + s, origin_y + s), text, font=font,
+                      fill=outline_color)
+
+        # Main glyph on top
+        draw.text((origin_x, origin_y), text, font=font, fill=fill_color)
+    else:
+        # --- Smooth (anti-aliased) rendering path ---
+        draw.text(
+            (origin_x, origin_y),
+            text,
+            font=font,
+            fill=fill_color,
+            stroke_width=stroke_width,
+            stroke_fill=outline_color,
+        )
+
+    # Crop to tight bounding box
+    bbox = img.getbbox()
+    if bbox is None:
+        # Nothing rendered – return a tiny transparent image
+        return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+
+    return img.crop(bbox)
+
+
+def alpha_composite_hard_overlay(
+    background: Image.Image,
+    foreground: Image.Image,
+    position: Tuple[int, int]
+) -> Image.Image:
+    """
+    Composite an RGBA foreground onto an RGB background using hard overlay.
+
+    Simulates the BitBLT hard-overlay behaviour of game HUD rendering:
+    where the foreground alpha is > 0, the foreground pixel fully replaces
+    the background pixel.
+
+    Args:
+        background: RGB background image
+        foreground: RGBA foreground image
+        position: (x, y) top-left position on the background
+
+    Returns:
+        RGB composite image (same size as background)
+    """
+    bg = background.convert('RGBA')
+
+    # Create a full-size overlay with transparent pixels
+    overlay = Image.new('RGBA', bg.size, (0, 0, 0, 0))
+    overlay.paste(foreground, position)
+
+    result = Image.alpha_composite(bg, overlay)
+    return result.convert('RGB')
 
 
 def load_custom_fonts(fonts_dir: Path) -> List[Path]:
@@ -231,6 +335,166 @@ def get_fallback_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+# ---------------------------------------------------------------------------
+# Degradation pipeline (Layer 4)
+# ---------------------------------------------------------------------------
+
+# Default probabilities and parameter ranges per degradation level
+DEGRADATION_PROFILES = {
+    "none": {},
+    "light": {
+        "resample":     {"prob": 0.3, "scale": (0.5, 0.75)},
+        "gaussian":     {"prob": 0.2, "sigma": (1, 5)},
+        "salt_pepper":  {"prob": 0.15, "amount": (0.002, 0.01)},
+        "gamma":        {"prob": 0.2, "gamma": (0.8, 1.2)},
+        "hsv_drift":    {"prob": 0.2, "h": (-5, 5), "s": (-10, 10), "v": (-10, 10)},
+        "jpeg":         {"prob": 0.3, "quality": (50, 85)},
+    },
+    "medium": {
+        "resample":     {"prob": 0.5, "scale": (0.35, 0.65)},
+        "gaussian":     {"prob": 0.4, "sigma": (2, 10)},
+        "salt_pepper":  {"prob": 0.3, "amount": (0.005, 0.03)},
+        "gamma":        {"prob": 0.4, "gamma": (0.6, 1.4)},
+        "hsv_drift":    {"prob": 0.4, "h": (-10, 10), "s": (-20, 20), "v": (-20, 20)},
+        "jpeg":         {"prob": 0.5, "quality": (25, 70)},
+    },
+    "heavy": {
+        "resample":     {"prob": 0.7, "scale": (0.25, 0.5)},
+        "gaussian":     {"prob": 0.6, "sigma": (5, 20)},
+        "salt_pepper":  {"prob": 0.5, "amount": (0.01, 0.06)},
+        "gamma":        {"prob": 0.6, "gamma": (0.4, 1.6)},
+        "hsv_drift":    {"prob": 0.6, "h": (-15, 15), "s": (-30, 30), "v": (-30, 30)},
+        "jpeg":         {"prob": 0.7, "quality": (10, 50)},
+    },
+}
+
+
+def degrade_resample(img: Image.Image, scale: float) -> Image.Image:
+    """Low-fidelity spatial resampling: downscale then upscale with NEAREST."""
+    w, h = img.size
+    small_w = max(1, int(w * scale))
+    small_h = max(1, int(h * scale))
+    down = img.resize((small_w, small_h), Image.Resampling.NEAREST)
+    return down.resize((w, h), Image.Resampling.NEAREST)
+
+
+def degrade_gaussian_noise(img: Image.Image, sigma: float) -> Image.Image:
+    """Add Gaussian noise to the image."""
+    arr = np.array(img, dtype=np.float32)
+    noise = np.random.normal(0, sigma, arr.shape).astype(np.float32)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    return Image.fromarray(arr, mode=img.mode)
+
+
+def degrade_salt_pepper(img: Image.Image, amount: float) -> Image.Image:
+    """Add salt-and-pepper noise."""
+    arr = np.array(img)
+    num_pixels = arr.shape[0] * arr.shape[1]
+    num_salt = int(num_pixels * amount / 2)
+    num_pepper = int(num_pixels * amount / 2)
+
+    # Salt
+    coords = [np.random.randint(0, d, num_salt) for d in arr.shape[:2]]
+    arr[coords[0], coords[1]] = 255
+
+    # Pepper
+    coords = [np.random.randint(0, d, num_pepper) for d in arr.shape[:2]]
+    arr[coords[0], coords[1]] = 0
+
+    return Image.fromarray(arr, mode=img.mode)
+
+
+def degrade_gamma(img: Image.Image, gamma: float) -> Image.Image:
+    """Apply random gamma correction."""
+    arr = np.array(img, dtype=np.float32) / 255.0
+    arr = np.power(arr, gamma)
+    arr = np.clip(arr * 255, 0, 255).astype(np.uint8)
+    return Image.fromarray(arr, mode=img.mode)
+
+
+def degrade_hsv_drift(
+    img: Image.Image, h_shift: float, s_shift: float, v_shift: float
+) -> Image.Image:
+    """Random HSV colour-space drift."""
+    hsv = img.convert('HSV')
+    arr = np.array(hsv, dtype=np.float32)
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + h_shift, 0, 255)
+    arr[:, :, 1] = np.clip(arr[:, :, 1] + s_shift, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] + v_shift, 0, 255)
+    return Image.fromarray(arr.astype(np.uint8), mode='HSV').convert(img.mode)
+
+
+def degrade_jpeg_artifacts(img: Image.Image, quality: int) -> Image.Image:
+    """Simulate JPEG compression artifacts via encode/decode round-trip."""
+    buf = io.BytesIO()
+    img.convert('RGB').save(buf, format='JPEG', quality=quality)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
+def apply_degradation_pipeline(
+    img: Image.Image, level: str = "none"
+) -> Image.Image:
+    """
+    Apply a randomised degradation pipeline to the image.
+
+    Each degradation operation is applied independently with a probability
+    determined by the selected level (none / light / medium / heavy).
+
+    Args:
+        img: Input RGB image
+        level: Degradation intensity level
+
+    Returns:
+        Degraded RGB image
+    """
+    profile = DEGRADATION_PROFILES.get(level, {})
+    if not profile:
+        return img
+
+    result = img.copy()
+
+    # 1. Resampling
+    cfg = profile.get("resample")
+    if cfg and random.random() < cfg["prob"]:
+        scale = random.uniform(*cfg["scale"])
+        result = degrade_resample(result, scale)
+
+    # 2. Gaussian noise
+    cfg = profile.get("gaussian")
+    if cfg and random.random() < cfg["prob"]:
+        sigma = random.uniform(*cfg["sigma"])
+        result = degrade_gaussian_noise(result, sigma)
+
+    # 3. Salt-pepper noise
+    cfg = profile.get("salt_pepper")
+    if cfg and random.random() < cfg["prob"]:
+        amount = random.uniform(*cfg["amount"])
+        result = degrade_salt_pepper(result, amount)
+
+    # 4. Gamma correction
+    cfg = profile.get("gamma")
+    if cfg and random.random() < cfg["prob"]:
+        gamma = random.uniform(*cfg["gamma"])
+        result = degrade_gamma(result, gamma)
+
+    # 5. HSV drift
+    cfg = profile.get("hsv_drift")
+    if cfg and random.random() < cfg["prob"]:
+        h = random.uniform(*cfg["h"])
+        s = random.uniform(*cfg["s"])
+        v = random.uniform(*cfg["v"])
+        result = degrade_hsv_drift(result, h, s, v)
+
+    # 6. JPEG artifacts (always last – operates on final pixel values)
+    cfg = profile.get("jpeg")
+    if cfg and random.random() < cfg["prob"]:
+        quality = random.randint(*cfg["quality"])
+        result = degrade_jpeg_artifacts(result, quality)
+
+    return result
+
+
 class DataGenerator:
     """
     Generates synthetic training data from skill icon images.
@@ -253,7 +517,8 @@ class DataGenerator:
         charset: str = DEFAULT_CHARSET,
         font_size_range: Tuple[int, int] = (10, 24),
         seed: Optional[int] = None,
-        variations_per_sample: int = 3
+        variations_per_sample: int = 3,
+        degradation: str = "none"
     ):
         """
         Initialize DataGenerator.
@@ -267,6 +532,7 @@ class DataGenerator:
             font_size_range: (min, max) font size in pixels
             seed: Random seed for reproducibility
             variations_per_sample: Number of variations to generate per icon-character pair
+            degradation: Degradation level (none/light/medium/heavy)
         """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir) / split
@@ -276,6 +542,7 @@ class DataGenerator:
         self.font_size_range = font_size_range
         self.seed = seed
         self.variations_per_sample = variations_per_sample
+        self.degradation = degradation
         
         # Get sampling rate for this split
         self.sampling_rate = self.SPLIT_SAMPLING_RATES.get(split, 1.0)
@@ -287,6 +554,7 @@ class DataGenerator:
         # Initialize random seed
         if seed is not None:
             random.seed(seed)
+            np.random.seed(seed)
         
         # Create output directory structure
         self._create_directory_structure()
@@ -298,6 +566,7 @@ class DataGenerator:
         logger.info(f"Character set: {self.charset} ({len(self.charset)} chars)")
         logger.info(f"Variations per sample: {self.variations_per_sample}")
         logger.info(f"Sampling rate: {self.sampling_rate:.0%} (split={self.split})")
+        logger.info(f"Degradation level: {self.degradation}")
         logger.info(f"Output structure: {self.output_dir}/<char>/")
     
     def _create_directory_structure(self) -> None:
@@ -435,8 +704,13 @@ class DataGenerator:
         variation_idx: int = 0
     ) -> None:
         """
-        Generate a single training sample.
-        
+        Generate a single training sample using the 4-layer pipeline.
+
+        Layer 1 – Foreground: render character as RGBA with native stroke.
+        Layer 2 – Background: extract patch from skill icon.
+        Layer 3 – Composite: Alpha-composite foreground onto background.
+        Layer 4 – Degradation: optional image degradation augmentation.
+
         Args:
             icon_img: Source icon image (50x50)
             char: Character to overlay
@@ -447,83 +721,61 @@ class DataGenerator:
             icon_name: Original icon filename
             variation_idx: Index of the variation (for unique filenames)
         """
-        # Extract 24x24 patch from icon
-        # Note: icon is 50x50, we want to extract 24x24 starting at (26-offset_x, offset_y)
-        # Java code: image.getSubimage(image.getWidth() - 24 - i, j, 24, 24)
-        # Where i and j are offsets 0-26
+        # --- Layer 2: Background patch ---
         x = icon_img.width - 24 - offset_x
         y = offset_y
         patch = extract_patch(icon_img, x, y, 24, 24)
-        patch = copy_image(patch)
-        
-        # Create drawing context
-        draw = ImageDraw.Draw(patch)
-        
-        # Get text bounding box for precise positioning
-        bbox = draw.textbbox((0, 0), char, font=font)
-        
-        # Calculate max x/y to align with top-right corner
-        # Account for 1px outline
-        # Right edge: x + bbox[2] + 1 = patch.width  => x = patch.width - bbox[2] - 1
-        # Top edge: y + bbox[1] - 1 = 0              => y = 1 - bbox[1]
-        
-        target_x = patch.width - bbox[2] - 1
-        target_y = 1 - bbox[1]
-        
-        # Calculate boundaries (valid range for x and y)
-        # Left edge: x + bbox[0] - 1 >= 0           => x >= 1 - bbox[0]
-        # Bottom edge: y + bbox[3] + 1 <= patch.height => y <= patch.height - bbox[3] - 1
-        
-        min_x = 1 - bbox[0]
-        max_y = patch.height - bbox[3] - 1
-        
-        # Add small random jitter (0-2px) away from corner for slight variation
-        # Moving away from top-right means x decreases, y increases
+        patch = copy_image(patch)  # detach from source
+
+        # --- Layer 1: Foreground rendering (RGBA) ---
+        # Randomly choose between hard-edge (binary) and smooth (anti-aliased)
+        # rendering to match the diversity seen in real game screenshots.
+        use_hard_edge = random.random() < 0.5
+        stroke_w = random.randint(1, 2)
+        shadow_off = random.randint(1, 2) if use_hard_edge else 0
+        fg = render_foreground_char(
+            text=char,
+            font=font,
+            fill_color=(255, 255, 255, 255),
+            outline_color=(0, 0, 0, 255),
+            stroke_width=stroke_w,
+            shadow_offset=shadow_off,
+            hard_edge=use_hard_edge,
+        )
+
+        # --- Position foreground (bias towards top-right with small jitter) ---
+        fw, fh = fg.size
+        pw, ph = patch.size
+
+        # Target: top-right corner with 1px margin
+        target_x = pw - fw - 1
+        target_y = 1
+
+        # Jitter away from top-right (x decreases, y increases)
         jitter_x = random.randint(0, 2)
         jitter_y = random.randint(0, 2)
-        
+
         text_x = target_x - jitter_x
         text_y = target_y + jitter_y
-        
-        # Ensure we don't exceed boundaries (clamp)
-        # Check limits to keep text fully inside image
-        
-        # Clamp Left
-        if text_x < min_x:
-            text_x = min_x
-            
-        # Clamp Bottom
-        if text_y > max_y:
-            text_y = max_y
-            
-        # Re-verify Top/Right (in case min/max constraints forced us out, or jitter was weird)
-        # But if the text is physically too big (min_x > target_x or target_y > max_y),
-        # we must violate one side. 
-        # "Do not exceed boundaries" AND "Close to Top Right".
-        # If we clip Right/Top, we look cropped.
-        # If we clip Left/Bottom, we also look cropped.
-        # Let's bias towards keeping Top-Right visible if it's too big (since that's the requested location).
-        
-        if text_x > target_x:
-            text_x = target_x
-        if text_y < target_y:
-            text_y = target_y
-        
-        # Ensure extremely large fonts don't position completely off-screen
-        # But allow partial overlap as that is good for robustness
-        
-        # Draw text with outline
-        draw_text_outline(draw, char, (text_x, text_y), font)
-        
-        # Generate output filename and save to character-specific subdirectory
+
+        # Clamp to keep within patch bounds
+        text_x = max(0, min(text_x, pw - fw))
+        text_y = max(0, min(text_y, ph - fh))
+
+        # --- Layer 3: Alpha composite ---
+        result = alpha_composite_hard_overlay(patch, fg, (text_x, text_y))
+
+        # --- Layer 4: Degradation augmentation ---
+        result = apply_degradation_pipeline(result, self.degradation)
+
+        # --- Save ---
         position_hash = (offset_x + 1) * (offset_y + 1)
         output_name = f"{icon_name}_FONT{font_idx}_{position_hash}_v{variation_idx}.png"
         char_dir = self.output_dir / char
         output_path = char_dir / output_name
-        
-        # Save image at native 24x24 resolution
-        patch.save(output_path, 'PNG')
-        
+
+        result.save(output_path, 'PNG')
+
         self.total_generated += 1
     
     def generate_dataset(self) -> None:
@@ -628,6 +880,14 @@ Example usage:
     )
     
     parser.add_argument(
+        "--degradation",
+        type=str,
+        default="none",
+        choices=["none", "light", "medium", "heavy"],
+        help="Image degradation intensity for augmentation (default: none)"
+    )
+    
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -667,7 +927,8 @@ Example usage:
             charset=args.charset,
             font_size_range=font_size_range,
             seed=args.seed,
-            variations_per_sample=args.variations
+            variations_per_sample=args.variations,
+            degradation=args.degradation
         )
         
         # Generate dataset

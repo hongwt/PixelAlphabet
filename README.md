@@ -50,24 +50,13 @@ Generate synthetic training data from game skill icons:
 
 ```bash
 # Generate training dataset
-python -m src.data_generator \
-    --input-dir ./path/to/skill_icons \
-    --output-dir ./data \
-    --split train
+python -m src.data_generator --input-dir ./icons --output-dir ./data --split train
 
 # Generate validation dataset
-python -m src.data_generator \
-    --input-dir ./path/to/skill_icons \
-    --output-dir ./data \
-    --split val \
-    --seed 42
+python -m src.data_generator --input-dir ./icons --output-dir ./data --split val --seed 42
 
 # Generate test dataset
-python -m src.data_generator \
-    --input-dir ./path/to/skill_icons \
-    --output-dir ./data \
-    --split test \
-    --seed 123
+python -m src.data_generator --input-dir ./icons --output-dir ./data --split test --seed 123
 ```
 
 The data generator will:
@@ -103,11 +92,7 @@ Import real screenshot data with automated label parsing:
 
 ```bash
 # Import real data with automatic random split
-python -m src.data_importer \
-    --source ./real_data \
-    --target ./data \
-    --ratios 0.75,0.15,0.10 \
-    --seed 42
+python -m src.data_importer --source ./real_data --target ./data --ratios 0.75,0.15,0.10 --seed 42
 
 # Dry-run to preview without copying
 python -m src.data_importer --dry-run
@@ -149,13 +134,7 @@ Each directory should contain 24x24 PNG images of the respective character.
 Train the PixelNet model:
 
 ```bash
-python -m src.train \
-    --data-root ./data \
-    --output-dir ./checkpoints \
-    --epochs 100 \
-    --batch-size 64 \
-    --learning-rate 1e-3 \
-    --dropout 0.3
+python -m src.train --data-root ./data --output-dir ./checkpoints --epochs 50 --batch-size 64 --learning-rate 1e-3 --dropout 0.3
 ```
 
 **Training Features**:
@@ -189,10 +168,7 @@ Visualize what each layer of the model learns:
 python visualize_layers.py
 
 # Or specify an image
-python -m src.inference \
-    --checkpoint checkpoints/best_model.pth \
-    --image data/test/A/image_0001.png \
-    --visualize
+python -m src.inference --checkpoint checkpoints/best_model.pth --image data/test/A/image_0001.png --visualize
 
 # Compare confusing character pairs (0 vs Q, 8 vs B, etc.)
 python compare_characters.py --mode confusion
